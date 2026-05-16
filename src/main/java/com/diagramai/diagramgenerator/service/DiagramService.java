@@ -10,6 +10,7 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.http.*;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 @RequiredArgsConstructor
@@ -18,6 +19,7 @@ public class DiagramService {
     private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate;
     private final DiagramValidator validator;
+    private final PositionService positionService;
 
     @Value("${gemini.api.key}")
     private String apiKey;
@@ -36,14 +38,31 @@ public class DiagramService {
         String cleanedText = projectText.trim().replaceAll("\\s+", " ");
 
         try {
-            // Generate all 3 diagrams
-            WorkflowDiagram workflow = generateWorkflow(cleanedText);
-            FunctionalBlockDiagram functionalBlock = generateFunctionalBlock(cleanedText);
-            SystemArchitecture systemArchitecture = generateSystemArchitecture(cleanedText);
+            // 🚀 Fire all 3 Gemini calls at the same time
+            CompletableFuture<WorkflowDiagram> workflowFuture =
+                    CompletableFuture.supplyAsync(() -> {
+                        try { return generateWorkflow(cleanedText); }
+                        catch (Exception e) { throw new RuntimeException(e); }
+                    });
 
-            response.setWorkflow(workflow);
-            response.setFunctionalBlock(functionalBlock);
-            response.setSystemArchitecture(systemArchitecture);
+            CompletableFuture<FunctionalBlockDiagram> functionalFuture =
+                    CompletableFuture.supplyAsync(() -> {
+                        try { return generateFunctionalBlock(cleanedText); }
+                        catch (Exception e) { throw new RuntimeException(e); }
+                    });
+
+            CompletableFuture<SystemArchitecture> architectureFuture =
+                    CompletableFuture.supplyAsync(() -> {
+                        try { return generateSystemArchitecture(cleanedText); }
+                        catch (Exception e) { throw new RuntimeException(e); }
+                    });
+
+            // Wait for all 3 to finish
+            CompletableFuture.allOf(workflowFuture, functionalFuture, architectureFuture).join();
+
+            response.setWorkflow(workflowFuture.get());
+            response.setFunctionalBlock(functionalFuture.get());
+            response.setSystemArchitecture(architectureFuture.get());
 
             // Validate all diagrams
             if (!validator.validate(response)) {
@@ -62,19 +81,25 @@ public class DiagramService {
     private WorkflowDiagram generateWorkflow(String projectText) throws Exception {
         String prompt = String.format(DiagramPrompts.WORKFLOW_PROMPT, projectText);
         String jsonResponse = callGemini(prompt);
-        return objectMapper.readValue(jsonResponse, WorkflowDiagram.class);
+        WorkflowDiagram diagram = objectMapper.readValue(jsonResponse, WorkflowDiagram.class);
+        positionService.assignWorkflowPositions(diagram.getNodes(), diagram.getEdges());
+        return diagram;
     }
 
     private FunctionalBlockDiagram generateFunctionalBlock(String projectText) throws Exception {
         String prompt = String.format(DiagramPrompts.FUNCTIONAL_BLOCK_PROMPT, projectText);
         String jsonResponse = callGemini(prompt);
-        return objectMapper.readValue(jsonResponse, FunctionalBlockDiagram.class);
+        FunctionalBlockDiagram diagram = objectMapper.readValue(jsonResponse, FunctionalBlockDiagram.class);
+        positionService.assignLayeredPositions(diagram.getNodes(), diagram.getEdges());
+        return diagram;
     }
 
     private SystemArchitecture generateSystemArchitecture(String projectText) throws Exception {
         String prompt = String.format(DiagramPrompts.SYSTEM_ARCHITECTURE_PROMPT, projectText);
         String jsonResponse = callGemini(prompt);
-        return objectMapper.readValue(jsonResponse, SystemArchitecture.class);
+        SystemArchitecture diagram = objectMapper.readValue(jsonResponse, SystemArchitecture.class);
+        positionService.assignLayeredPositions(diagram.getNodes(), diagram.getEdges());
+        return diagram;
     }
 
     private String callGemini(String prompt) throws Exception {

@@ -80,6 +80,9 @@ public class DiagramValidator {
             return false; // Duplicate IDs found
         }
 
+//        // Remove duplicate node IDs instead of rejecting
+//        nodes.removeIf(node -> !nodeIds.add(node.get("id")));
+
         // Validate edges
         for (Map<String, String> edge : edges) {
             String source = edge.get("source");
